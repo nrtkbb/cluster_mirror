@@ -4,20 +4,20 @@ import re
 from itertools import chain
 
 
-def divide_select_list(selectlist):
+def divide_select_list(selected):
     """
-    :param list of pm.PyNode selectlist: selection list
-    :rtype: (list of pm.nodetypes.Cluster, pm.nodetypes.Mesh)
+    :param list of pm.PyNode selected: selection list
+    :rtype: (list of pm.nt.Cluster, pm.nt.Mesh)
     """
-    if 2 > len(selectlist):
+    if 2 > len(selected):
         raise Exception(u'Please select clusters and mesh.')
 
     clusters = pm.listConnections \
-        (selectlist[0:-1], destination=True, type=u'cluster')
+        (selected[0:-1], destination=True, type=u'cluster')
     if 0 >= len(clusters):
         raise Exception(u'Please select clusters and mesh.')
 
-    paste_mesh = selectlist[-1].getShape()
+    paste_mesh = selected[-1].getShape()
     if type(paste_mesh) is not pm.nodetypes.Mesh:
         raise Exception(u'Finally select the mesh.')
 

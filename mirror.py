@@ -1,5 +1,7 @@
 #! -*- coding: utf-8 -*-
+import sys
 import pymel.core as pm
+import maya.OpenMaya as OpenMaya
 
 
 def vtx2pointsDict(vtx):
@@ -37,6 +39,9 @@ def mirror_cluster_on_lattice():
     # いったん無効化するデフォーマのセットを格納する変数を宣言
     deformers = set()
 
+    # mesh か lattice 以外を対象にしている cluster があれば格納する
+    ignore_deformers = []
+
     for target_cluster in target_clusters:
         # cluster のデフォーム対象を getGeometry で取得: 名前の配列が返る
         output_geometries = target_cluster.getGeometry()
@@ -55,10 +60,7 @@ def mirror_cluster_on_lattice():
 
         # mesh か lattice 以外にもセットされてる cluster ならスキップする
         if output_num is not len(output_geometries):
-            continue
-
-        # 中身が無くなってもスキップする
-        if 0 == len(output_geometries):
+            ignore_deformers.append(target_cluster)
             continue
 
         # デフォーム対象のヒストリをリストアップする
@@ -69,36 +71,24 @@ def mirror_cluster_on_lattice():
          for d in histories
          if u'geometryFilter' in pm.nodeType(d, inherited=True)]
 
+    # mesh か lattice 以外にアタッチしている cluster があれば選択して処理を止める
+    if 0 < len(ignore_deformers):
+        ignore_handles = [d.matrix.listConnections()[0] for d in ignore_deformers]
+        pm.select(ignore_handles)
+        ignore_names = [c.name() for c in ignore_handles]
+        message = u'These are the cluster that are not supported. ' \
+                  u'It must be attached only to the mesh or lattice. ' \
+                  + ' '.join(ignore_names)
+        OpenMaya.MGlobal.displayError(message)
+        sys.exit()
+
     # あとで復元する envelope を保存。デフォーマをキーにしつつ envelope を保存する
-    envelopes = {d:d.getEnvelope() for d in deformers}
+    envelopes = {d: d.getEnvelope() for d in deformers}
 
     # デフォーマを無効化し元の形状にする
     [d.setEnvelope(0) for d in deformers]
 
     for target_cluster in target_clusters:
-        # cluster のデフォーム対象を getGeometry で取得: 名前の配列が返る
-        output_geometries = target_cluster.getGeometry()
-
-        # type を調べるために一度 PyNode にする
-        output_geometries = [pm.PyNode(g) for g in output_geometries]
-
-        # フィルタリングする前の数を保存
-        output_num = len(output_geometries)
-
-        # デフォーム対象を mesh か lattice だけにする
-        output_geometries = filter(lambda g:
-                                   pm.nodetypes.Mesh == type(g) or
-                                   pm.nodetypes.Lattice == type(g),
-                                   output_geometries)
-
-        # mesh か lattice 以外にもセットされてる cluster ならスキップする
-        if output_num is not len(output_geometries):
-            continue
-
-        # 中身が無くなってもスキップする
-        if 0 == len(output_geometries):
-            continue
-
         members = []
         [members.extend(x) for x in pm.listSets(object=target_cluster)]
         members = pm.ls(members, flatten=True)
@@ -143,7 +133,7 @@ def mirror_cluster_on_lattice():
                                             query=True,
                                             value=True)[0]
         pm.select(weights.keys())
-        new_cluster, _ = pm.cluster()
+        new_cluster, new_cluster_handle = pm.cluster()
 
         new_cluster.attr('relative') \
             .set(target_cluster.attr('relative').get())
@@ -154,6 +144,8 @@ def mirror_cluster_on_lattice():
         new_cluster.attr('percentResolution') \
             .set(target_cluster.attr('percentResolution').get())
         new_cluster.setEnvelope(envelopes[target_cluster])
+
+        selected.append(new_cluster_handle)
 
     # envelope を復元
     [d.setEnvelope(envelopes[d]) for d in envelopes.iterkeys()]

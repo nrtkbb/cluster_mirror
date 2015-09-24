@@ -23,10 +23,25 @@ def mirror_cluster_on_lattice():
     # 最後に選択を復元するために保存する
     selected = pm.selected()
 
-    # 選択しているノードの子孫から clusterHandle をリストアップする
-    target_cluster_handles = pm.ls(selection=True,
-                                   dagObjects=True,
-                                   type=u'clusterHandle')
+    # 選択しているノードから clusterHandle をリストアップする
+    target_cluster_handles = pm.ls(selection=True, type=u'clusterHandle')
+
+    # 選択している transform の shape を確認して clusterHandle なら格納する
+    is_cluster_only = True
+    for transform in pm.ls(selection=True, type=u'transform'):
+        for shape in transform.getShapes():
+            if pm.nt.ClusterHandle == type(shape):
+                target_cluster_handles.append(shape)
+            else:
+                is_cluster_only = False
+
+    # 初めに選択していたリストと数が合わなかったら
+    # clusterHandle 以外を選択していたとみなして終了
+    if is_cluster_only and len(selected) == len(target_cluster_handles):
+        message = u'These are not clusterHandle. ' \
+                  u'Please select the clusterHandle only.'
+        OpenMaya.MGlobal.displayError(message)
+        sys.exit()
 
     # clusterHandle を一つも選択していなければ終了
     if 0 == len(target_cluster_handles):

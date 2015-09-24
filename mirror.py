@@ -20,16 +20,35 @@ def distanceMin(turn_x_point, points):
 
 
 def mirror_cluster_on_lattice():
+    # 最後に選択を復元するために保存する
     selected = pm.selected()
-    # 選択しているノードの子孫から clusterHandle をリストアップする
-    target_cluster_handles = pm.ls(selection=True,
-                                   dagObjects=True,
-                                   type=u'clusterHandle')
 
-    # clusterHandle を選択していなければ終了
-    assert 0 != len(target_cluster_handles), \
-        u'Not find clusterHandle from selection, ' \
-        u'Please select one or more clusterHandle'
+    # 選択しているノードから clusterHandle をリストアップする
+    target_cluster_handles = pm.ls(selection=True, type=u'clusterHandle')
+
+    # 選択している transform の shape を確認して clusterHandle なら格納する
+    is_cluster_only = True
+    for transform in pm.ls(selection=True, type=u'transform'):
+        for shape in transform.getShapes():
+            if pm.nt.ClusterHandle == type(shape):
+                target_cluster_handles.append(shape)
+            else:
+                is_cluster_only = False
+
+    # 初めに選択していたリストと数が合わなかったら
+    # clusterHandle 以外を選択していたとみなして終了
+    if is_cluster_only and len(selected) == len(target_cluster_handles):
+        message = u'These are not clusterHandle. ' \
+                  u'Please select the clusterHandle only.'
+        OpenMaya.MGlobal.displayError(message)
+        sys.exit()
+
+    # clusterHandle を一つも選択していなければ終了
+    if 0 == len(target_cluster_handles):
+        message = u'Not found clusterHandle from selection list, ' \
+                  u'Please select more clusterHandle before execute.'
+        OpenMaya.MGlobal.displayError(message)
+        sys.exit()
 
     # clusterHandle のコネクションを追って cluster をリストアップする
     target_clusters = pm.listConnections(target_cluster_handles,
@@ -75,10 +94,9 @@ def mirror_cluster_on_lattice():
     if 0 < len(ignore_deformers):
         ignore_handles = [d.matrix.listConnections()[0] for d in ignore_deformers]
         pm.select(ignore_handles)
-        ignore_names = [c.name() for c in ignore_handles]
         message = u'These are the cluster that are not supported. ' \
-                  u'It must be attached only to the mesh or lattice. ' \
-                  + ' '.join(ignore_names)
+                  u'It must be attached only to the mesh or lattice. => ' \
+                  + ' '.join([c.name() for c in ignore_handles])
         OpenMaya.MGlobal.displayError(message)
         sys.exit()
 
@@ -89,52 +107,89 @@ def mirror_cluster_on_lattice():
     [d.setEnvelope(0) for d in deformers]
 
     for target_cluster in target_clusters:
+
+        # target_cluster のデフォーム対象を格納する
         members = []
         [members.extend(x) for x in pm.listSets(object=target_cluster)]
+
+        # lattice1.pt[0:9][0:9][0:9] みたいにまとめられてる配列を全部バラバラに扱う
         members = pm.ls(members, flatten=True)
+
+        # node をキーにして ポイント を値に格納する
         member_dict = {}
+
+        # node の全ポイントの座標を pm.dt.Point 型で格納する
         all_points_dict = {}
+
         for member in members:
+            # ポイントの node 部分を摘出する
             node = member.node()
+
+            # すでに node がキーに存在するなら
             if node in member_dict:
+                # ポイントを格納して次へ進む
                 member_dict[node].append(member)
                 continue
 
+            # ポイントを list でラッピングして値を初期化
             member_dict[node] = [member]
+
+            # さらに mesh や lattice の全ポイント座標を格納する
             if pm.nt.Mesh == type(node):
                 all_points_dict[node] = vtx2pointsDict(node.vtx)
             elif pm.nt.Lattice == type(node):
                 all_points_dict[node] = pt2pointsDict(node.pt)
 
-        weights = {}
+        mirror_point_and_weights = {}
         for node in member_dict.iterkeys():
             all_points = all_points_dict[node]
             if pm.nt.Mesh == type(node):
                 for member in member_dict[node]:
+                    # vtx の world 座標を取得する。pm.dt.Point 型で返ってくる
                     p = member.getPosition(space='world')
+
+                    # x を反転して
                     p = pm.dt.Point(p.x * -1, p.y, p.z)
+
+                    # p に一番近いポイントを摘出
                     v = distanceMin(p, all_points)
-                    weights[v] = pm.percent(target_cluster,
-                                            member,
-                                            query=True,
-                                            value=True)[0]
+
+                    # member のウェイトをコピーするため、保存している
+                    mirror_point_and_weights[v] = pm.percent(target_cluster,
+                                                             member,
+                                                             query=True,
+                                                             value=True)[0]
             elif pm.nt.Lattice == type(node):
+
+                # ここでは負荷軽減のため . （ドットシンタックス）無しで、
+                # 関数を呼び出せるようにキャッシュしている
                 xform = pm.xform
                 point = pm.dt.Point
                 for member in member_dict[node]:
+                    # pt の world 座標を取得する。list of double 型で返ってくる
                     p = xform(member,
                               query=True,
                               translation=True,
                               worldSpace=True)
+
+                    # x を反転しつつ pm.dt.Point 型にする
                     p = point(p[0] * -1, p[1], p[2])
+
+                    # p に一番近いポイントを摘出
                     v = distanceMin(p, all_points)
-                    weights[v] = pm.percent(target_cluster,
-                                            member,
-                                            query=True,
-                                            value=True)[0]
-        pm.select(weights.keys())
+
+                    # member のウェイトをコピーするため、保存している
+                    mirror_point_and_weights[v] = pm.percent(target_cluster,
+                                                             member,
+                                                             query=True,
+                                                             value=True)[0]
+        # 反転した点を選択する
+        pm.select(mirror_point_and_weights.keys())
+
+        # cluster を作成する
         new_cluster, new_cluster_handle = pm.cluster()
 
+        # 新しい cluster に元のアトリビュートの値をセットする
         new_cluster.attr('relative') \
             .set(target_cluster.attr('relative').get())
         new_cluster.attr('usePartialResolution') \
@@ -145,9 +200,11 @@ def mirror_cluster_on_lattice():
             .set(target_cluster.attr('percentResolution').get())
         new_cluster.setEnvelope(envelopes[target_cluster])
 
+        # 処理が完了した時に選択するリストに新しい clusterHandle も含める
         selected.append(new_cluster_handle)
 
     # envelope を復元
     [d.setEnvelope(envelopes[d]) for d in envelopes.iterkeys()]
 
+    # 初めに選択していたリスト + 新たな clusterHandle リストを選択する
     pm.select(selected)
